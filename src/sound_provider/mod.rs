@@ -1,12 +1,11 @@
 pub mod bms;
 
-pub struct SoundEvent<'a> {
-    // number of samples since last sound to play this sound
-    offset: u32,
-    // source to play at the time
-    source: Box<dyn rodio::Source<Item = i16> + 'a>
-}
+use rodio::Source;
+use rodio::source::Buffered;
 
-pub trait SoundProvider {
-    fn get_sound_events<'a>(&'a mut self) -> Box<dyn Iterator<Item = SoundEvent> + 'a>;
+pub struct SoundEvent {
+    // number of milliseconds to wait before playing this sound (from the beginning)
+    pub offset: u32,
+    // source to play at the time
+    pub buffer: Buffered<Box<dyn Source<Item = f32> + Send>>
 }

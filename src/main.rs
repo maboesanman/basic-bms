@@ -2,48 +2,40 @@
 extern crate lazy_static;
 extern crate rodio;
 
-// use std::io::BufReader;
+use std::io::BufReader;
+use std::fs::File;
 // use std::thread;
 // use std::time::Duration;
+
+use std::{thread, time};
+use sound_provider::bms::{BMS, BMSSoundProvider};
+use song::Song;
+use rodio::source::{Buffered};
+use rodio::{Source, Decoder};
+
 mod sound_provider;
 mod song;
 
 fn main() {
-    let _bms = sound_provider::bms::load(std::path::Path::new("Megalovania/配置なし.bms"));
-    // bms.get_measures();
-    // for (key, value) in s.metadata {
-    //     println!("{}: {}", key, value);
+    let bms = BMS::new(std::path::Path::new("Megalovania/配置なし.bms"));
+    for (key, value) in bms.metadata.iter() {
+        println!("{}: {}", key, value);
+    }
+    let mut bms_sound_provider = BMSSoundProvider::new(bms);
+    let file = File::open("Megalovania/rg_1_002.wav").unwrap();
+    // let decoder = Decoder::new(BufReader::new(file)).unwrap();
+    // let buffer = decoder.buffered();
+    // let cloned_buffer = buffer.clone();
+    // for event in bms_sound_provider {
+
     // }
-    // let device = rodio::default_output_device().unwrap();
-    // let device = rodio::devices().unwrap().nth(4).unwrap();
-    // println!("{}", rodio::devices().unwrap().count());
-
-
-    // let file = std::fs::File::open("Megalovania/base_003.wav").unwrap();
-    // let beep1 = rodio::play_once(&device, BufReader::new(file)).unwrap();
-    // beep1.set_volume(0.2);
-    // println!("Started beep1");
-
-    // thread::sleep(Duration::from_millis(1500));
-
-    // let file = std::fs::File::open("Megalovania/base_003.wav").unwrap();
-    // rodio::play_once(&device, BufReader::new(file))
-    //     .unwrap()
-    //     .detach();
-    // println!("Started beep2");
-
-    // thread::sleep(Duration::from_millis(1500));
-    // let file = std::fs::File::open("Megalovania/base_003.wav").unwrap();
-    // let beep3 = rodio::play_once(&device, file).unwrap();
-    // println!("Started beep3");
-
-    // thread::sleep(Duration::from_millis(1500));
-    // drop(beep1);
-    // println!("Stopped beep1");
-
-    // thread::sleep(Duration::from_millis(1500));
-    // drop(beep3);
-    // println!("Stopped beep3");
-
-    // thread::sleep(Duration::from_millis(1500));
+    
+    let song = Song::new(Box::new(bms_sound_provider)).buffered();
+    // for sample in song.clone() {
+    // }
+    let device = rodio::default_output_device().unwrap();
+    // rodio::play_raw(&device, decoder);
+    // rodio::play_once(&device, file);
+    rodio::play_raw(&device, song);
+    thread::sleep(time::Duration::from_millis(1000000));
 }
