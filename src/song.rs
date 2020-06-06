@@ -28,6 +28,7 @@ impl<'a> Song<'a> {
 impl<'a> Iterator for Song<'a> {
     type Item = f32;
 
+    // this is the tight audio loop
     fn next(&mut self) -> Option<f32> {
         loop {
             match self.sound_provider.peek() {
@@ -39,7 +40,7 @@ impl<'a> Iterator for Song<'a> {
                         break
                     }
                 },
-                None => break
+                None => return None
             }
         }
         let mut i = 0;

@@ -1,5 +1,6 @@
 
 extern crate regex;
+extern crate shellexpand;
 
 use regex::Regex;
 use std::fs::File;
@@ -7,9 +8,12 @@ use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 use std::iter::{Peekable};
 use std::path::{Path};
+use std::ffi::OsStr;
+use std::thread;
 use rodio::source::{Buffered};
 use rodio::{Source, Decoder};
 use super::{SoundEvent};
+use shellexpand::tilde;
 
 lazy_static! {
     static ref METADATA_REGEX: Regex = Regex::new(r"#(?P<key>[A-Z]+) (?P<value>.*)").unwrap();
@@ -23,9 +27,8 @@ pub struct BMS {
     sounds: HashMap<u32, String>,
     data: Vec<BMSDatum>,
     bpm: u16,
-    // root: String,
-    // file: String,
-    
+    root: String,
+    filename: String,
 }
 
 #[derive(Clone)]
@@ -37,13 +40,20 @@ struct BMSDatum {
 
 impl BMS {
     pub fn new(path: &Path) -> BMS {
+        println!("{}", path.display());
+        let path = path.to_str().unwrap().to_owned();
+        let path = tilde(&path);
+        let path = path.as_ref();
+        let path = Path::new(path);
+        println!("{}", path.display());
+        let (root, filename) = BMS::parse_filename(path);
         let mut bms = BMS {
             metadata: HashMap::new(),
             sounds: HashMap::new(),
             data: Vec::new(),
             bpm: 0,
-            // root: filename
-            // file: filename.to_string(),
+            root,
+            filename,
         };
         let file = File::open(path).unwrap();
         let reader = BufReader::new(file);
@@ -53,6 +63,8 @@ impl BMS {
                 Err(err) => println!("{}", err),
             }
         }
+
+        // bpm defaults to 130
         bms.bpm = match bms.metadata.get("BPM") {
             Some(bpm) => u16::from_str_radix(bpm, 10).unwrap(),
             None => 130,
@@ -60,6 +72,15 @@ impl BMS {
     
         bms.data.sort_by(|a, b| a.measure.cmp(&b.measure));
         bms
+    }
+
+    fn parse_filename(path: &Path) -> (String, String) {
+        let mut buf = path.to_path_buf();
+        let filename = String::from(buf.file_name().unwrap().to_str().unwrap());
+        buf.pop();
+        let root = String::from(buf.to_str().unwrap());
+        path.file_name().unwrap().to_string_lossy();
+        (root, filename)
     }
 
     fn handle_line(&mut self, line: &'_ str) {
@@ -125,15 +146,13 @@ pub struct BMSSoundProvider {
     sources: HashMap<String, LazySource>,
     measures: std::iter::Enumerate<Measures>,
     current_measure: Option<(usize, Vec<(BMSDatum, usize)>)>,
-    // (n, a, b) -> a/b of the way through the nth measure
-    // last_event_time: (u16, usize, usize),
-    // in milliseconds
-    measure_length: u32,
+    measure_length: u32, // in milliseconds
 }
 
 enum LazySource {
     Path(String),
     Buffer(Buffered<Box<dyn Source<Item = f32> + Send>>),
+    Missing,
 }
 
 impl<'a> BMSSoundProvider {
@@ -144,14 +163,34 @@ impl<'a> BMSSoundProvider {
             sources.insert(path.clone(), LazySource::Path(path.clone()));
         }
 
-        BMSSoundProvider {
-            bms: bms.clone(),
+        let bms_clone = bms.clone();
+
+        let mut provider = BMSSoundProvider {
+            bms,
             sources,
-            measures: Measures::new(Box::new(bms.data.into_iter())).enumerate(),
+            measures: Measures::new(Box::new(bms_clone.data.into_iter())).enumerate(),
             current_measure: None,
             // last_event_time: (0, 0, 1),
-            measure_length: 4 * 60 * 1000 / bms.bpm as u32,
+            measure_length: 4 * 60 * 1000 / bms_clone.bpm as u32,
+        };
+        for (i, _) in bms_clone.sounds.clone().iter() {
+            provider.get_source(*i);
         }
+
+        provider
+    }
+
+    fn get_file(&self, path: &str) -> Result<File, &str> {
+        let path = Path::new(path);
+        let file_stem = path.file_stem().unwrap().to_str().unwrap();
+        let file_ext = path.extension().unwrap().to_str().unwrap();
+        for ext in &[file_ext, "wav", "ogg"] {
+            match File::open(format!("{}/{}.{}", self.bms.root, file_stem, ext)) {
+                Ok(file) => return Ok(file),
+                Err(_) => {},
+            }
+        }
+        Err("{}.{wav|ogg} file not found")
     }
     
     fn get_source(&mut self, id: u32) -> Option<Buffered<Box<dyn Source<Item = f32> + Send>>> {
@@ -159,29 +198,35 @@ impl<'a> BMSSoundProvider {
             Some(path) => match self.sources.get(path) {
                 Some(lazy_source) => match lazy_source {
                     LazySource::Path(path) => {
-                        let file = std::fs::File::open(format!("Megalovania/{}", path));
+                        let file = self.get_file(path);
                         match file {
                             Ok(file) => {
                                 let decoder = Box::new(Decoder::new(BufReader::new(file)).unwrap().convert_samples()) as Box<dyn Source<Item = f32> + Send>;
                                 let uniform = Box::new(rodio::source::UniformSourceIterator::new(decoder, 1, 44100)) as Box<dyn Source<Item = f32> + Send>;
                                 let buffer = uniform.buffered();
                                 let cloned_buffer = buffer.clone();
-                                self.sources.insert(path.clone(), LazySource::Buffer(buffer));
-                                Some(cloned_buffer)
+                                thread::spawn(move || {
+                                    for _ in cloned_buffer {}
+                                });
+                                self.sources.insert(path.clone(), LazySource::Buffer(buffer.clone()));
+                                Some(buffer)
                             },
                             Err(err) => {
-                                println!("{}", err);
+                                println!("{}: {}", path, err);
+                                self.sources.insert(path.clone(), LazySource::Missing);
                                 None
                             }
                         }
                     },
-                    LazySource::Buffer(buffer) => Some(buffer.clone())
+                    LazySource::Buffer(buffer) => Some(buffer.clone()),
+                    LazySource::Missing => None
                 }
                 None => None,
             }
             None => None,
         }
     }
+
     fn next_event_index(&self) -> Option<usize> {
         let mut current_a = 1usize;
         let mut current_n = 1usize;
