@@ -40,7 +40,13 @@ impl<'a> Iterator for Song<'a> {
                         break
                     }
                 },
-                None => return None
+                None => {
+                    if self.current_sources.is_empty() {
+                        return None
+                    } else {
+                        break
+                    }
+                }
             }
         }
         let mut i = 0;
